@@ -158,9 +158,10 @@ function renderControls() {
 
 function renderClock() {
   const c = $("#clock"), ph = $("#phase"); if (!c) return;
-  const e = elapsedMin(session, store.now());
+  const e = elapsedMin(session, session && session.ended && session.endedAt ? session.endedAt : store.now());
   if (e == null) { c.textContent = "—"; ph.textContent = session ? "Not started" : ""; return; }
   c.textContent = fmt(e * 60);
+  if (session.ended) { ph.textContent = "Session ended"; return; }
   const s = schedule(session);
   let t = "Writing";
   if (e >= s.write.target) t = "Round 1";
