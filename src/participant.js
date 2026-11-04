@@ -1,6 +1,6 @@
 import { createStore } from "./store.js";
 import { createPaper, SLOT_COLORS } from "./paper.js";
-import { schedule, elapsedMin, fmt, words, gate, esc } from "./common.js";
+import { schedule, elapsedMin, fmt, words, gate, esc, ROUNDS, ROUND_KEYS, SLOT_NAMES } from "./common.js";
 
 const store = createStore();
 const $ = (s) => document.querySelector(s);
@@ -56,6 +56,7 @@ function currentView() {
   if (!session) return "loading";
   const e = elapsedMin(session, store.now());
   const sch = schedule(session);
+  if (session.ended) return person ? "return" : "ended";
   if (!person) {
     if (e != null && e >= sch.doors) return "closed";
     return "join";
@@ -66,7 +67,7 @@ function currentView() {
   if (person.phase === "reading" && person.holding) return "reading:" + person.holding;
   if (person.phase === "done") {
     const mine = pieces.find((p) => p.id === me);
-    const back = session.returnedAll || (mine && mine.status === "complete") || (e != null && e >= sch.r2.target + 1.5 && mine && !mine.reader);
+    const back = session.returnedAll || (mine && mine.status === "complete") || (e != null && e >= sch[ROUND_KEYS[ROUNDS - 1]].target + 1.5 && mine && !mine.reader);
     return back ? "return" : "returnwait";
   }
   return "loading";
@@ -94,13 +95,13 @@ function tick() {
   if (!status) return;
   let step = null;
   if (name === "writing") step = sch.write;
-  if (name === "reading") step = (person && person.readsDone >= 1) ? sch.r2 : sch.r1;
+  if (name === "reading") step = sch[ROUND_KEYS[Math.min(ROUNDS - 1, (person && person.readsDone) || 0)]];
   if (!step) return;
   const g = gate(step, e);
   const banner = $("#banner");
   if (g.state === "locked") {
     status.innerHTML = name === "writing"
-      ? `Keep writing — submit opens in <b>${fmt(g.secs)}</b>`
+      ? `Take your time. The submit button will appear at the ${step.unlock}-minute mark.`
       : `Keep reading and reflecting — you can pass it on in <b>${fmt(g.secs)}</b>`;
     status.className = "status";
   } else if (g.state === "open") {
@@ -123,6 +124,7 @@ function tick() {
   if (submit) {
     submit.disabled = g.locked || busy || (viewCtx.canSubmit && !viewCtx.canSubmit());
     submit.title = g.locked ? "This unlocks when the timer reaches zero" : "";
+    if (name === "writing") submit.style.visibility = g.locked ? "hidden" : "visible";
   }
 }
 
@@ -137,6 +139,7 @@ const header = (sub = "") => `
 const views = {
   loading() { setBar(""); main.className = ""; main.innerHTML = `<div class="center-card"><p class="muted">Loading…</p></div>`; },
   nosession() { setBar(""); main.className = ""; main.innerHTML = `<div class="center-card">${header()}<p>The session hasn't opened yet. This page will update on its own.</p></div>`; },
+  ended() { setBar(""); main.className = ""; main.innerHTML = `<div class="center-card">${header()}<p>This session has ended. Thank you for being part of it.</p></div>`; },
   closed() { setBar(""); main.className = ""; main.innerHTML = `<div class="center-card">${header()}<p>This session is already underway, and the doors have closed. Thank you for coming — please stay with us for the discussion that follows.</p></div>`; },
 
   join() {
@@ -145,7 +148,7 @@ const views = {
       <form id="join" class="join">
         <label>First name<input name="first" required maxlength="40" autocomplete="given-name"></label>
         <label>Email<input name="email" type="email" required maxlength="120" autocomplete="email"></label>
-        <p class="fine">Your name and email are seen only by Peter. Your writing will be read anonymously by two other participants.</p>
+        <p class="fine">Your name and email are seen only by Peter. Your writing will be read anonymously by three other participants.</p>
         <button class="btn primary big" type="submit">Join</button>
       </form></div>`;
     $("#join").onsubmit = async (ev) => {
@@ -173,7 +176,7 @@ const views = {
     const nm = myPrivate ? esc(myPrivate.firstName) : "";
     main.innerHTML = `<div class="center-card">${header()}
       <p class="lead">Welcome${nm ? ", " + nm : ""}. You're in.</p>
-      <p>When Peter starts the clock, a single question will appear here, and you'll have about ten minutes to write.</p>
+      <p>When Peter starts the clock, a single question will appear here, and you'll have about nine minutes to write.</p>
       <p class="muted pulse">Waiting for Peter to begin…</p></div>`;
   },
 
@@ -247,22 +250,24 @@ const views = {
       if (!piece || ctx.paper) return;
       const mySlot = Math.max(1, (piece.readers || []).indexOf(me) + 1);
       ctx.mySlot = mySlot;
-      const other = mySlot === 1 ? 2 : 1;
+      const earlier = [1, 2, 3].filter((s) => s < mySlot);
+      const cname = { 1: "blue", 2: "red", 3: "green" };
+      const earlierTxt = earlier.map((s) => `<span style="color:${SLOT_COLORS[s]}">${cname[s]}</span>`).join(" and ");
       $("#instr").innerHTML = `
         <b>Read through your collaborator's moment.</b> Highlight a phrase or sentence, then click <span class="chip">+ Add reflection</span> to leave a reflection beside it.
         In each reflection, <b>connect what they wrote to an experience of your own.</b> Do this for as many phrases as you can.
-        ${mySlot === 2 ? `<br>The <span style="color:${SLOT_COLORS[1]}">blue</span> notes are from the first reader — you can also <b>reply</b> to their reflections.` : ""}
+        ${earlier.length ? `<br>The ${earlierTxt} notes are from earlier readers — you can also <b>reply</b> to their reflections.` : ""}
         <span class="hint">Drag the paper to move around it.</span>`;
       wireInstr();
       $("#legend").innerHTML = `<span><i style="background:#222"></i>Writer</span>` +
-        (mySlot === 2 ? `<span><i style="background:${SLOT_COLORS[1]}"></i>First reader</span>` : "") +
+        earlier.map((s) => `<span><i style="background:${SLOT_COLORS[s]}"></i>${SLOT_NAMES[s]}</span>`).join("") +
         `<span><i style="background:${SLOT_COLORS[mySlot]}"></i>You</span>`;
       // Leave our first name for the author to see at the very end.
       if (myPrivate && myPrivate.firstName) store.set(`sessions/${sid}/pieces/${pid}/names/${me}`, { firstName: myPrivate.firstName, slot: mySlot }).catch(console.error);
       else store.get(`sessions/${sid}/private/${me}`).then((p) => { myPrivate = p; if (p) store.set(`sessions/${sid}/pieces/${pid}/names/${me}`, { firstName: p.firstName, slot: mySlot }); }).catch(console.error);
       ctx.paper = createPaper($("#vp"), {
         text: piece.text, mode: "edit", me, mySlot, heading: "Your collaborator's moment",
-        labelFor: (slot, by) => by === me ? "You" : (slot === 1 ? "First reader" : "Second reader"),
+        labelFor: (slot, by) => by === me ? "You" : (SLOT_NAMES[slot] || "Reader"),
         onAdd: async (d) => {
           await store.add(`sessions/${sid}/pieces/${pid}/notes`, { ...d, by: me, slot: mySlot, parent: null, at: store.now() });
           if (!piece.touched) store.update(`sessions/${sid}/pieces/${pid}`, { touched: true }).catch(() => {});
@@ -271,6 +276,7 @@ const views = {
           await store.add(`sessions/${sid}/pieces/${pid}/notes`, { body, by: me, slot: mySlot, parent: parentId, at: store.now() });
           if (!piece.touched) store.update(`sessions/${sid}/pieces/${pid}`, { touched: true }).catch(() => {});
         },
+        onEdit: (id, body) => store.update(`sessions/${sid}/pieces/${pid}/notes/${id}`, { body, editedAt: store.now() }),
         onMove: (id, x, y) => store.update(`sessions/${sid}/pieces/${pid}/notes/${id}`, { x, y }).catch(console.error),
         onDelete: (id) => {
           const kids = ctx.notes.filter((n) => n.parent === id);
@@ -299,16 +305,16 @@ const views = {
     main.innerHTML = `<div class="center-card">
       <div class="wait-dots"><span></span><span></span><span></span></div>
       <h2>Thank you for reading so generously.</h2>
-      <p>Your own moment is on its way back to you. It will appear here, with everyone's reflections, as soon as your second reader finishes.</p></div>`;
+      <p>Your own moment is on its way back to you. It will appear here, with everyone's reflections, as soon as your last reader finishes.</p></div>`;
   },
 
   return() {
     main.className = "reading";
     setBar(`<div class="brand">I Want to Feel More Alive</div><div class="status open">Your moment, as others read it</div><span></span>`);
-    main.innerHTML = `<div class="instructions" id="instr"><b>Here is your moment, as two other people read it.</b> Take your time with their reflections — notice what they saw, and what it brought up for them. <span class="hint">Drag the paper to move around it.</span></div><div id="vp"></div><div class="legend" id="legend"></div>`;
+    main.innerHTML = `<div class="instructions" id="instr"><b>Here is your moment, as other people read it.</b> Take your time with their reflections — notice what they saw, and what it brought up for them. <span class="hint">Drag the paper to move around it.</span></div><div id="vp"></div><div class="legend" id="legend"></div>`;
     wireInstr();
     const ctx = viewCtx; ctx.names = {}; ctx.notes = [];
-    const label = (slot) => { const n = Object.values(ctx.names).find((x) => x.slot === slot); return n ? n.firstName : (slot === 1 ? "First reader" : "Second reader"); };
+    const label = (slot) => { const n = Object.values(ctx.names).find((x) => x.slot === slot); return n ? n.firstName : (SLOT_NAMES[slot] || "Reader"); };
     const mine = pieces.find((p) => p.id === me);
     ctx.paper = createPaper($("#vp"), { text: (mine && mine.text) || "", mode: "view", me, mySlot: 0, heading: "Your moment", labelFor: (slot) => label(slot) });
     const legend = () => {
@@ -340,13 +346,13 @@ async function finishReading(pid) {
     if (!p || !me_ || me_.holding !== pid) return;
     const now = store.now();
     const done = (me_.readsDone || 0) + 1;
-    t.update(`sessions/${sid}/pieces/${pid}`, { reader: null, status: (p.readers || []).length >= 2 ? "complete" : "pool", pooledAt: now, touched: false });
-    t.update(`sessions/${sid}/people/${me}`, { readsDone: done, holding: null, phase: done >= 2 ? "done" : "waiting", waitingSince: now });
+    t.update(`sessions/${sid}/pieces/${pid}`, { reader: null, status: (p.readers || []).length >= ROUNDS ? "complete" : "pool", pooledAt: now, touched: false });
+    t.update(`sessions/${sid}/people/${me}`, { readsDone: done, holding: null, phase: done >= ROUNDS ? "done" : "waiting", waitingSince: now });
   });
 }
 
 function eligibleFor(uid, p) {
-  return p.status === "pool" && p.submitted && p.author !== uid && !(p.readers || []).includes(uid) && (p.readers || []).length < 2;
+  return p.status === "pool" && p.submitted && p.author !== uid && !(p.readers || []).includes(uid) && (p.readers || []).length < ROUNDS;
 }
 let matching = false;
 async function matchmake() {
@@ -380,8 +386,8 @@ async function matchmakeTimer() {
   const now = store.now();
   const e = elapsedMin(session, now);
   const sch = schedule(session);
-  // Escape hatch: second-round waiters who can never be matched.
-  if ((person.readsDone || 0) >= 1 && (session.endReading || (e != null && e >= sch.r2.target + 2))) {
+  // Escape hatch: later-round waiters who can never be matched.
+  if ((person.readsDone || 0) >= 1 && (session.endReading || (e != null && e >= sch[ROUND_KEYS[ROUNDS - 1]].target + 2))) {
     await store.update(`sessions/${sid}/people/${me}`, { phase: "done", waitingSince: now }).catch(() => {});
     return;
   }

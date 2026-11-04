@@ -25,4 +25,7 @@ export function gate(step, e) {
   return { state: "over", locked: false };
 }
 
+export const ROUNDS = 3;
+export const ROUND_KEYS = ["r1", "r2", "r3"];
+export const SLOT_NAMES = { 1: "First reader", 2: "Second reader", 3: "Third reader" };
 export const sessPath = (sid) => `sessions/${sid}`;

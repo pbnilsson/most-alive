@@ -107,7 +107,7 @@ main.reading { position: fixed; inset: 58px 0 0 0; overflow: hidden; }
 .doc ::selection { background: rgba(255,214,90,.6); }
 .cards { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
 .card { position: absolute; pointer-events: auto; background: #fff; border-radius: 6px; padding: 10px 14px 12px; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 6px 22px rgba(60,45,20,.12); border-top: 3px solid #888; cursor: default; }
-.card.s1 { border-top-color: var(--accent); } .card.s2 { border-top-color: var(--accent2); }
+.card.s1 { border-top-color: var(--accent); } .card.s2 { border-top-color: var(--accent2); } .card.s3 { border-top-color: #2f7a3d; }
 .card:hover, .card:focus-within { z-index: 8; }
 .card.dragging { box-shadow: 0 14px 40px rgba(60,45,20,.25); z-index: 10; }
 .card-h { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
@@ -115,6 +115,12 @@ main.reading { position: fixed; inset: 58px 0 0 0; overflow: hidden; }
 .who { font-size: 12px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
 .s1 > .card-h .who, .reply.s1 .who { color: var(--accent); }
 .s2 > .card-h .who, .reply.s2 .who { color: var(--accent2); }
+.s3 > .card-h .who, .reply.s3 .who { color: #2f7a3d; }
+.card.s3 > .body, .reply.s3 .body { color: #22592c; }
+.reply.s3 { border-left-color: rgba(47,122,61,.5); }
+.edit-link { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 12.5px; text-decoration: underline; text-underline-offset: 3px; margin-left: auto; margin-right: 8px; padding: 0; }
+.edit-link:hover { color: var(--ink); }
+.edit-form { margin-top: 4px; }
 .x { border: 0; background: none; color: #aaa; cursor: pointer; font-size: 18px; line-height: 1; padding: 0 2px; }
 .x:hover { color: #9b2c1c; }
 .q { font-family: var(--serif); font-style: italic; font-size: 14px; color: var(--muted); margin-bottom: 6px; line-height: 1.4; }

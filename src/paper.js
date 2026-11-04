@@ -6,7 +6,8 @@ const DOC_Y = 170;
 const CARD_W = 300;
 const GAP = 80;
 
-export const SLOT_COLORS = { 1: "#2c5fae", 2: "#b8432a" };
+export const SLOT_COLORS = { 1: "#2c5fae", 2: "#b8432a", 3: "#2f7a3d" };
+const SLOT_RGB = { 1: "44,95,174", 2: "184,67,42", 3: "47,122,61" };
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -45,6 +46,7 @@ export function createPaper(viewport, opts) {
   let notes = [];
   let draft = null; // {start,end,quote,el}
   let openReply = null; // {id, value}
+  let editing = null; // {id, value}
   let pan = { x: 0, y: 0 };
   let pendingSel = null;
 
@@ -125,7 +127,10 @@ export function createPaper(viewport, opts) {
       if (cover.length) {
         span.dataset.n = cover.map((n) => n.id).join(" ");
         const slots = [...new Set(cover.map((n) => n.slot))].sort();
-        span.classList.add("hl", "hl" + slots.join(""));
+        span.classList.add("hl");
+        span.style.backgroundColor = `rgba(${SLOT_RGB[slots[0]] || "120,120,120"},${slots.length > 1 ? 0.13 : 0.16})`;
+        if (slots.length > 1) span.style.backgroundImage = slots.slice(1).map((x) => `linear-gradient(rgba(${SLOT_RGB[x]},.13), rgba(${SLOT_RGB[x]},.13))`).join(",");
+        span.style.boxShadow = slots.map((x, i) => `inset 0 ${-2 - i * 2}px 0 rgba(${SLOT_RGB[x]},.55)`).join(",");
       }
       if (draft && draft.start <= a && draft.end >= b) span.classList.add("hl-draft");
       docEl.append(span);
@@ -134,6 +139,29 @@ export function createPaper(viewport, opts) {
 
   // ---------- cards ----------
   function canEdit(n) { return opts.mode === "edit" && n.by === opts.me; }
+  function editBtn(n) {
+    const b = el("button", "edit-link", "Edit"); b.title = "Edit your words";
+    b.onclick = (e) => { e.stopPropagation(); editing = { id: n.id, value: n.body }; renderCards(); };
+    return b;
+  }
+  function editForm(n) {
+    const f = el("div", "edit-form");
+    const ta = el("textarea"); ta.rows = 4; ta.value = editing.value;
+    ta.oninput = () => { editing.value = ta.value; };
+    const row = el("div", "row");
+    const cancel = el("button", "btn small", "Cancel");
+    const save = el("button", "btn small primary", "Save");
+    cancel.onclick = () => { editing = null; renderCards(); };
+    save.onclick = async () => {
+      const v = ta.value.trim(); if (!v) { ta.focus(); return; }
+      save.disabled = true;
+      n.body = v; editing = null; renderCards();
+      await opts.onEdit(n.id, v);
+    };
+    row.append(cancel, save); f.append(ta, row);
+    setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 0);
+    return f;
+  }
   function cardFor(n, replies) {
     const c = el("div", `card s${n.slot}` + (canEdit(n) ? " mine" : ""));
     c.dataset.id = n.id;
@@ -143,12 +171,12 @@ export function createPaper(viewport, opts) {
     if (canEdit(n)) {
       const del = el("button", "x", "×"); del.title = "Delete this reflection";
       del.onclick = () => { if (confirm("Delete this reflection?")) opts.onDelete(n.id); };
-      h.append(del);
+      h.append(editBtn(n), del);
       h.classList.add("drag");
     }
     c.append(h);
     if (n.quote) c.append(el("div", "q", "“" + (n.quote.length > 140 ? n.quote.slice(0, 137) + "…" : n.quote) + "”"));
-    c.append(el("div", "body", n.body));
+    c.append(editing && editing.id === n.id ? editForm(n) : el("div", "body", n.body));
     if (replies.length) {
       const rs = el("div", "replies");
       for (const r of replies) {
@@ -158,9 +186,9 @@ export function createPaper(viewport, opts) {
         if (canEdit(r)) {
           const del = el("button", "x", "×"); del.title = "Delete this reply";
           del.onclick = () => { if (confirm("Delete this reply?")) opts.onDelete(r.id); };
-          rh.append(del);
+          rh.append(editBtn(r), del);
         }
-        rr.append(rh, el("div", "body", r.body));
+        rr.append(rh, editing && editing.id === r.id ? editForm(r) : el("div", "body", r.body));
         rs.append(rr);
       }
       c.append(rs);

@@ -1,6 +1,6 @@
 import { createStore } from "./store.js";
 import { createPaper, SLOT_COLORS } from "./paper.js";
-import { schedule, elapsedMin, fmt, words, esc } from "./common.js";
+import { schedule, elapsedMin, fmt, words, esc, ROUNDS, SLOT_NAMES } from "./common.js";
 import { DEFAULT_SCHEDULE, HOST_EMAIL } from "./config.js";
 import { toPng } from "html-to-image";
 import JSZip from "jszip";
@@ -123,6 +123,8 @@ function renderControls() {
         <tr><td>Writing</td><td>${f("write", "unlock")}</td><td>${f("write", "warn")}</td><td>${f("write", "target")}</td></tr>
         <tr><td>Round 1</td><td>${f("r1", "unlock")}</td><td>${f("r1", "warn")}</td><td>${f("r1", "target")}</td></tr>
         <tr><td>Round 2</td><td>${f("r2", "unlock")}</td><td>${f("r2", "warn")}</td><td>${f("r2", "target")}</td></tr>
+        <tr><td>Round 3</td><td>${f("r3", "unlock")}</td><td>${f("r3", "warn")}</td><td>${f("r3", "target")}</td></tr>
+        <tr><td>End (own pages)</td><td>${f("end")}</td><td></td><td></td></tr>
         <tr><td>Doors close</td><td>${f("doors")}</td><td></td><td></td></tr></table>`;
     el.querySelectorAll("input").forEach((inp) => inp.onchange = async () => {
       const s = JSON.parse(JSON.stringify(sch));
@@ -136,17 +138,20 @@ function renderControls() {
     };
   } else {
     el.innerHTML = `
-      <div class="row-between"><h3>${esc(session.label)} — running</h3>
+      <div class="row-between"><h3>${esc(session.label)} — ${session.ended ? "ended" : "running"}</h3>
       <div class="ctl">
         <button class="btn small" id="back1" title="Move the clock back one minute (gives everyone more time)">− 1 min</button>
         <button class="btn small" id="fwd1" title="Jump the clock forward one minute">+ 1 min</button>
         <button class="btn small" id="release" title="Anyone stuck waiting for a second piece goes straight to their own page">Release stuck readers</button>
         <button class="btn small" id="returnall" title="Show every author their page now, whatever its state">Return all pages now</button>
+        <button class="btn small danger" id="endsess" title="Everyone sees their own finished page; no more notes can be added">${session.ended ? "Session ended" : "End session"}</button>
       </div></div>
-      <p class="muted small">Schedule: writing unlocks ${sch.write.unlock}′ (aim ${sch.write.target}′) · round 1 unlocks ${sch.r1.unlock}′ (aim ${sch.r1.target}′) · round 2 unlocks ${sch.r2.unlock}′ (aim ${sch.r2.target}′) · doors closed at ${sch.doors}′${session.returnedAll ? " · <b>pages returned</b>" : ""}</p>`;
+      <p class="muted small">Schedule: writing unlocks ${sch.write.unlock}′ (aim ${sch.write.target}′) · round 1 unlocks ${sch.r1.unlock}′ (aim ${sch.r1.target}′) · round 2 unlocks ${sch.r2.unlock}′ (aim ${sch.r2.target}′) · round 3 unlocks ${sch.r3.unlock}′ (aim ${sch.r3.target}′) · end ${sch.end}′ · doors closed at ${sch.doors}′${session.returnedAll ? " · <b>pages returned</b>" : ""}</p>`;
     $("#back1").onclick = () => store.update(`sessions/${sid}`, { startedAt: session.startedAt + 60000 });
     $("#fwd1").onclick = () => store.update(`sessions/${sid}`, { startedAt: session.startedAt - 60000 });
-    $("#release").onclick = () => { if (confirm("Send anyone still waiting for a second piece straight on to their own page?")) store.update(`sessions/${sid}`, { endReading: true }); };
+    $("#release").onclick = () => { if (confirm("Send anyone still waiting for another piece straight on to their own page?")) store.update(`sessions/${sid}`, { endReading: true }); };
+    $("#endsess").disabled = !!session.ended;
+    $("#endsess").onclick = () => { if (confirm("End the session now? Everyone goes to their own finished page, and no more reflections can be added. Your exports will still work.")) store.update(`sessions/${sid}`, { ended: true, endedAt: store.now(), returnedAll: true, endReading: true }); };
     $("#returnall").onclick = () => { if (confirm("Return every page to its author now? Readers still working can keep adding.")) store.update(`sessions/${sid}`, { returnedAll: true, endReading: true }); };
   }
 }
@@ -160,16 +165,18 @@ function renderClock() {
   let t = "Writing";
   if (e >= s.write.target) t = "Round 1";
   if (e >= s.r1.target) t = "Round 2";
-  if (e >= s.r2.target) t = "Reading their own pages";
-  const next = [[s.write.unlock, "writing unlocks"], [s.write.target, "writing target"], [s.r1.unlock, "round 1 unlocks"], [s.r1.target, "round 1 target"], [s.r2.unlock, "round 2 unlocks"], [s.r2.target, "round 2 target"]].find(([m]) => m > e);
+  if (e >= s.r2.target) t = "Round 3";
+  if (e >= s.r3.target) t = "Reading their own pages";
+  if (e >= s.end) t = "Finished — on to discussion";
+  const next = [[s.write.unlock, "writing submit appears"], [s.write.target, "writing ends"], [s.r1.unlock, "round 1 can pass on"], [s.r1.target, "round 1 ends"], [s.r2.unlock, "round 2 can pass on"], [s.r2.target, "round 2 ends"], [s.r3.unlock, "round 3 can pass on"], [s.r3.target, "round 3 ends"], [s.end, "end"]].filter(([m]) => m != null).find(([m]) => m > e);
   ph.textContent = t + (next ? ` · ${next[1]} in ${fmt((next[0] - e) * 60)}` : "");
 }
 
 function phaseLabel(p) {
   if (!p) return "";
   if (p.phase === "writing") return "✍️ Writing";
-  if (p.phase === "waiting") return p.readsDone ? "⏳ Waiting for 2nd piece" : "⏳ Waiting for 1st piece";
-  if (p.phase === "reading") return `📖 Reading (${(p.readsDone || 0) + 1} of 2)`;
+  if (p.phase === "waiting") return `⏳ Waiting for piece ${(p.readsDone || 0) + 1}`;
+  if (p.phase === "reading") return `📖 Reading (${(p.readsDone || 0) + 1} of ${ROUNDS})`;
   if (p.phase === "done") return "✅ Done reading";
   return p.phase;
 }
@@ -207,7 +214,7 @@ function renderGallery() {
 }
 
 function paperOpts(id) {
-  return { text: pieces[id].text, mode: "view", me: "host", mySlot: 0, heading: `${nameOf(id)}'s moment`, labelFor: (slot) => readerName(id, slot) || (slot === 1 ? "First reader" : "Second reader") };
+  return { text: pieces[id].text, mode: "view", me: "host", mySlot: 0, heading: `${nameOf(id)}'s moment`, labelFor: (slot) => readerName(id, slot) || SLOT_NAMES[slot] || "Reader" };
 }
 function openPiece(id) {
   $("#modal").hidden = false;
@@ -242,10 +249,10 @@ function download(name, blob) {
 }
 const csvCell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
 function piecesCsv() {
-  const rows = [["First name", "Email", "Words", "Moment", "First reader", "Second reader", "Reflections", "Replies"]];
+  const rows = [["First name", "Email", "Words", "Moment", "First reader", "Second reader", "Third reader", "Reflections", "Replies"]];
   for (const id of Object.keys(people).sort((a, b) => nameOf(a).localeCompare(nameOf(b)))) {
     const pc = pieces[id] || {}; const ns = notes[id] || [];
-    rows.push([nameOf(id), priv[id] && priv[id].email, words(pc.text), pc.text, readerName(id, 1), readerName(id, 2), ns.filter((n) => !n.parent).length, ns.filter((n) => n.parent).length]);
+    rows.push([nameOf(id), priv[id] && priv[id].email, words(pc.text), pc.text, readerName(id, 1), readerName(id, 2), readerName(id, 3), ns.filter((n) => !n.parent).length, ns.filter((n) => n.parent).length]);
   }
   return "﻿" + rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
 }

@@ -12,8 +12,10 @@ export const HOST_EMAIL = "pbnilsson@gmail.com";
 
 // Minutes from the moment the host clicks Start.
 export const DEFAULT_SCHEDULE = {
-  doors: 8,
-  write: { unlock: 8, warn: 9, target: 10 },
-  r1: { unlock: 16, warn: 17, target: 18 },
-  r2: { unlock: 24, warn: 25, target: 26 },
+  doors: 7,
+  write: { unlock: 7, warn: 8, target: 9 },
+  r1: { unlock: 14, warn: 14, target: 15 },
+  r2: { unlock: 20, warn: 20, target: 21 },
+  r3: { unlock: 26, warn: 26, target: 27 },
+  end: 29,
 };

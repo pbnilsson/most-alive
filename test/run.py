@@ -50,22 +50,11 @@ async def main():
         async def adv(minutes):
             await pg.evaluate(f"window.__mockDB.offset += {minutes}*60000")
             await pg.wait_for_timeout(1300)
-        await adv(9.3)
-        await pg.locator("#p1").screenshot(path=f"{SHOT}/02-writing-banner.png")
-        # Staggered submits
-        for pid in ps:
-            await fr(pid).click("#submit"); await pg.wait_for_timeout(250)
-        await pg.wait_for_timeout(1500)
         async def phases():
             out = {}
             for pid in ps:
                 out[pid] = await pg.evaluate(f"(()=>{{const d=window.__mockDB.docs; for (const [k,v] of d) if (k.endsWith('/people/{pid}')) return v.phase+':'+(v.holding||'')+':'+(v.readsDone||0); }})()")
             return out
-        print("after writing:", await phases())
-        await adv(0.5)  # 30s waiting → rescue
-        await pg.wait_for_timeout(8000)
-        print("after rescue window:", await phases())
-
         async def reflect(pid, k):
             f = fr(pid)
             if await f.locator(".doc").count() == 0: return False
@@ -73,56 +62,65 @@ async def main():
               const spans=[...document.querySelectorAll('.doc span[data-off]')];
               const s = spans.find(x=>x.textContent.length>40) || spans[0];
               const tn=s.firstChild; const r=document.createRange();
-              const st = Math.min(tn.length-5, 3+{k}*25);
-              r.setStart(tn, st); r.setEnd(tn, Math.min(tn.length, st+22));
+              const st = Math.max(0, Math.min(tn.length-8, 3+{k}*21));
+              r.setStart(tn, st); r.setEnd(tn, Math.min(tn.length, st+18));
               const sel=getSelection(); sel.removeAllRanges(); sel.addRange(r);
               document.querySelector('.doc').dispatchEvent(new MouseEvent('mouseup',{{bubbles:true}}));
             }})()""")
             await pg.wait_for_timeout(200)
+            if not await f.locator(".add-btn").is_visible(): return False
             await f.click(".add-btn")
-            await f.fill(".card.draft textarea", f"This reminds me of a summer when I was twelve and felt the same rush — reflection {k} from {pid}.")
+            await f.fill(".card.draft textarea", f"This reminds me of a summer when I was twelve and felt the same rush (round {k}, {pid}).")
             await f.click(".card.draft .btn.primary")
             await pg.wait_for_timeout(300)
             return True
+        print("submit hidden while locked:", await fr("p1").locator("#submit").evaluate("b=>getComputedStyle(b).visibility"))
+        print("writing status:", await fr("p1").locator("#status").inner_text())
+        await adv(8.3 - 0)
+        await pg.locator("#p1").screenshot(path=f"{SHOT}/02-writing-banner.png")
         for pid in ps:
-            await reflect(pid, 0); await reflect(pid, 1)
-        await pg.locator("#p2").screenshot(path=f"{SHOT}/03-round1.png")
-        print("r1 submit locked:", await fr("p2").locator("#submit").is_disabled())
-        await adv(16.6 - 9.8)
-        for pid in ps:
-            f = fr(pid)
-            if await f.locator("#submit").count() and not await f.locator("#submit").is_disabled():
-                await f.click("#submit"); await pg.wait_for_timeout(250)
-        await pg.wait_for_timeout(2000)
-        print("after round 1:", await phases())
-        await adv(0.5); await pg.wait_for_timeout(8000)
-        print("after r2 rescue window:", await phases())
-        for pid in ps:
-            ok = await reflect(pid, 2)
-            f = fr(pid)
-            if ok and await f.locator(".card .reply-btn").count():
-                await f.locator(".card:not(.mine) .reply-btn").first.click()
-                await f.fill(".reply-form textarea", f"Yes — and for me it was my grandfather's workshop. ({pid})")
-                await f.click(".reply-form .btn.primary"); await pg.wait_for_timeout(300)
-        await pg.locator("#p3").screenshot(path=f"{SHOT}/04-round2.png")
-        await adv(24.6 - 17.6)
-        for pid in ps:
-            f = fr(pid)
-            if await f.locator("#submit").count() and not await f.locator("#submit").is_disabled():
-                await f.click("#submit"); await pg.wait_for_timeout(250)
-        await pg.wait_for_timeout(2500)
-        print("after round 2:", await phases())
-        for pid in ps:
-            t = await fr(pid).locator("#bar").inner_text()
-            print(pid, "bar:", t.replace("\n", " | "))
+            await fr(pid).click("#submit"); await pg.wait_for_timeout(250)
+        await pg.wait_for_timeout(1500)
+        print("after writing:", await phases())
+        await adv(0.5); await pg.wait_for_timeout(9000)
+        print("after rescue:", await phases())
+        cur = 8.8
+        for rnd, unlock in [(1, 14.3), (2, 20.3), (3, 26.3)]:
+            for pid in ps:
+                ok = await reflect(pid, rnd)
+                f = fr(pid)
+                if ok and rnd > 1 and await f.locator(".card:not(.mine) .reply-btn").count():
+                    await f.locator(".card:not(.mine) .reply-btn").first.dispatch_event("click")
+                    await f.fill(".reply-form textarea", f"Yes, and for me it was my grandfather's workshop. ({pid} r{rnd})")
+                    await f.locator(".reply-form .btn.primary").dispatch_event("click"); await pg.wait_for_timeout(300)
+                if ok and rnd == 1 and pid == "p1":
+                    await f.locator(".card.mine .edit-link").first.dispatch_event("click")
+                    await f.fill(".edit-form textarea", "EDITED: this reminds me of my first winter in Vermont.")
+                    await f.locator(".edit-form .btn.primary").dispatch_event("click"); await pg.wait_for_timeout(400)
+            if rnd == 3: await pg.locator("#p3").screenshot(path=f"{SHOT}/04-round3.png")
+            await adv(unlock - cur); cur = unlock
+            for pid in ps:
+                f = fr(pid)
+                if await f.locator("#submit").count() and not await f.locator("#submit").is_disabled():
+                    await f.click("#submit"); await pg.wait_for_timeout(250)
+            await pg.wait_for_timeout(2000)
+            await adv(0.5); cur += 0.5; await pg.wait_for_timeout(9000)
+            print(f"after round {rnd}:", await phases())
+        await pg.wait_for_timeout(1500)
         await pg.locator("#p1").screenshot(path=f"{SHOT}/05-return.png")
         await pg.locator("#host").screenshot(path=f"{SHOT}/06-host.png")
         pieces = await pg.evaluate("(()=>{const o={};for(const [k,v] of window.__mockDB.docs){const m=k.match(/pieces\\/(p\\d)$/); if(m) o[m[1]]={readers:v.readers,status:v.status};} return o;})()")
         print("pieces:", json.dumps(pieces))
+        bad=[k for k,v in pieces.items() if len(set(v['readers']))!=len(v['readers']) or k in v['readers']]
+        print("readers per piece:", sorted(len(v['readers']) for v in pieces.values()), "violations:", bad)
+        edited = await pg.evaluate("(()=>{for(const [k,v] of window.__mockDB.docs) if(v.body&&v.body.startsWith('EDITED')) return v.body; return null})()")
+        print("edit saved:", edited)
         # PNG export
         async with pg.expect_download() as dl:
             await host.locator("[data-png]").first.click()
         d = await dl.value; await d.save_as(f"{SHOT}/07-export.png")
+        await host.click("#endsess"); await pg.wait_for_timeout(1200)
+        print("after end, p2 bar:", (await fr("p2").locator("#bar").inner_text()).replace("\n"," | "))
         print("errors:", errors[:10])
         await b.close()
 
