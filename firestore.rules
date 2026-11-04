@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isHost() {
+      return signedIn() && request.auth.token.email == 'pbnilsson@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    match /config/{d} {
+      allow read: if signedIn();
+      allow write: if isHost();
+    }
+    match /clocks/{uid} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+    match /sessions/{sid} {
+      allow read: if signedIn();
+      allow write: if isHost();
+
+      match /people/{uid} {
+        allow read, update: if signedIn();
+        allow create: if signedIn() && (request.auth.uid == uid || isHost());
+        allow delete: if isHost();
+      }
+      // Names and emails: only the person themselves (to write) and Peter (to read).
+      match /private/{uid} {
+        allow create, update: if signedIn() && request.auth.uid == uid;
+        allow read: if isHost() || (signedIn() && request.auth.uid == uid);
+        allow delete: if isHost();
+      }
+      match /pieces/{pid} {
+        allow read, update: if signedIn();
+        allow create: if signedIn() && request.auth.uid == pid;
+        allow delete: if isHost();
+
+        match /notes/{nid} {
+          allow read: if signedIn();
+          allow create: if signedIn() && request.resource.data.by == request.auth.uid;
+          allow update, delete: if (signedIn() && resource.data.by == request.auth.uid) || isHost();
+        }
+        // Reader first names: visible only to the author of the piece (at the end) and Peter.
+        match /names/{uid} {
+          allow create, update: if signedIn() && request.auth.uid == uid;
+          allow read: if isHost() || (signedIn() && (request.auth.uid == pid || request.auth.uid == uid));
+        }
+      }
+    }
+  }
+}
