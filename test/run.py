@@ -19,7 +19,7 @@ async def main():
         b = await p.chromium.launch()
         pg = await b.new_page(viewport={"width": 1300, "height": 805*(N+1)})
         errors = []
-        pg.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        pg.on("console", lambda m: (errors.append(m.text) if m.type == "error" else None, print(m.text) if m.text.startswith("PLAN") else None))
         pg.on("pageerror", lambda e: errors.append(str(e)))
         async def on_dialog(d):
             if d.type == "prompt": await d.accept("Practice")
@@ -37,12 +37,12 @@ async def main():
         ps = [f"p{i}" for i in range(1, N + 1)]
         for i, pid in enumerate(ps):
             f = fr(pid)
-            await f.fill("input[name=first]", NAMES[i]); await f.fill("input[name=email]", f"{NAMES[i].lower()}@example.org")
+            await f.fill("input[name=first]", NAMES[i % len(NAMES)]); await f.fill("input[name=email]", f"{NAMES[i % len(NAMES)].lower()}{i}@example.org")
             await f.click("button[type=submit]")
         await pg.wait_for_timeout(600)
         await host.click("#start"); await pg.wait_for_timeout(600)
         for i, pid in enumerate(ps):
-            await fr(pid).fill("#ta", TEXTS[i])
+            await fr(pid).fill("#ta", TEXTS[i % len(TEXTS)])
         await fr("p1").locator("main").screenshot(path=f"{SHOT}/01-writing-locked.png") if False else None
         await pg.locator("#p1").screenshot(path=f"{SHOT}/01-writing.png")
         dis = await fr("p1").locator("#submit").is_disabled()
@@ -121,6 +121,11 @@ async def main():
         d = await dl.value; await d.save_as(f"{SHOT}/07-export.png")
         await host.click("#endsess"); await pg.wait_for_timeout(1200)
         print("after end, p2 bar:", (await fr("p2").locator("#bar").inner_text()).replace("\n"," | "))
+        swaps = await pg.evaluate("(()=>{let n=0;for(const [k,v] of window.__mockDB.docs) if(/people\\/p\\d+$/.test(k)&&v.swapped) n++; return n;})()")
+        print("last-minute swaps:", swaps)
+        async with pg.expect_download() as dl2:
+            await fr("p1").locator("#dl").dispatch_event("click")
+        d2 = await dl2.value; await d2.save_as(f"{SHOT}/08-participant-download.png"); print("participant download:", d2.suggested_filename)
         print("errors:", errors[:10])
         await b.close()
 

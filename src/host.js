@@ -2,7 +2,7 @@ import { createStore } from "./store.js";
 import { createPaper, SLOT_COLORS } from "./paper.js";
 import { schedule, elapsedMin, fmt, words, esc, ROUNDS, SLOT_NAMES } from "./common.js";
 import { DEFAULT_SCHEDULE, HOST_EMAIL } from "./config.js";
-import { toPng } from "html-to-image";
+import { paperPng } from "./export.js";
 import JSZip from "jszip";
 
 const store = createStore();
@@ -225,22 +225,7 @@ function openPiece(id) {
   $("#mpng").onclick = async () => download(`${fileName(id)}.png`, await pngFor(id));
 }
 
-async function pngFor(id) {
-  const host = $("#offscreen");
-  host.innerHTML = ""; const vp = document.createElement("div"); vp.style.cssText = "position:absolute;inset:0"; host.append(vp);
-  const p = createPaper(vp, paperOpts(id));
-  p.setNotes(notes[id] || []);
-  if (document.fonts) await document.fonts.ready;
-  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-  p.refresh();
-  const b = p.bounds();
-  const url = await toPng(p.paper, {
-    width: b.w, height: b.h, pixelRatio: 2, backgroundColor: "#fcfaf4",
-    style: { transform: `translate(${-b.x}px, ${-b.y}px)`, boxShadow: "none", borderRadius: "0" },
-  });
-  host.innerHTML = "";
-  return (await fetch(url)).blob();
-}
+async function pngFor(id) { return paperPng(paperOpts(id), notes[id] || []); }
 
 function slug() { return ((session && session.label) || "session").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); }
 function fileName(id) { return `${nameOf(id)}-${(priv[id] && priv[id].email || id).split("@")[0]}`.replace(/[^A-Za-z0-9_-]+/g, "_"); }

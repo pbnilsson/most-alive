@@ -1,5 +1,6 @@
 import { createStore } from "./store.js";
 import { createPaper, SLOT_COLORS } from "./paper.js";
+import { paperPng, downloadBlob } from "./export.js";
 import { schedule, elapsedMin, fmt, words, gate, esc, ROUNDS, ROUND_KEYS, SLOT_NAMES } from "./common.js";
 
 const store = createStore();
@@ -8,7 +9,7 @@ const main = $("#main");
 const bar = $("#bar");
 
 let me = null, sid = null;
-let session = null, person = null, pieces = [], myPrivate = null;
+let session = null, person = null, pieces = [], peopleAll = [], myPrivate = null;
 let unsubs = [];
 let view = null; // current view key
 let viewCtx = {}; // per-view state
@@ -45,6 +46,7 @@ function attach(newSid) {
   unsubs.push(store.watchDoc(`sessions/${sid}`, (s) => { session = s; render(); }));
   unsubs.push(store.watchDoc(`sessions/${sid}/people/${me}`, (p) => { person = p; render(); }));
   unsubs.push(store.watchColl(`sessions/${sid}/pieces`, (ps) => { pieces = ps; render(); matchmake(); }));
+  unsubs.push(store.watchColl(`sessions/${sid}/people`, (ps) => { peopleAll = ps; matchmake(); }));
   store.get(`sessions/${sid}/private/${me}`).then((p) => { myPrivate = p; }).catch(() => {});
 }
 
@@ -310,13 +312,22 @@ const views = {
 
   return() {
     main.className = "reading";
-    setBar(`<div class="brand">I Want to Feel More Alive</div><div class="status open">Your moment, as others read it</div><span></span>`);
+    setBar(`<div class="brand">I Want to Feel More Alive</div><div class="status open">Your moment, as others read it</div><button id="dl" class="btn primary">Download my page</button>`);
     main.innerHTML = `<div class="instructions" id="instr"><b>Here is your moment, as other people read it.</b> Take your time with their reflections — notice what they saw, and what it brought up for them. <span class="hint">Drag the paper to move around it.</span></div><div id="vp"></div><div class="legend" id="legend"></div>`;
     wireInstr();
     const ctx = viewCtx; ctx.names = {}; ctx.notes = [];
     const label = (slot) => { const n = Object.values(ctx.names).find((x) => x.slot === slot); return n ? n.firstName : (SLOT_NAMES[slot] || "Reader"); };
     const mine = pieces.find((p) => p.id === me);
     ctx.paper = createPaper($("#vp"), { text: (mine && mine.text) || "", mode: "view", me, mySlot: 0, heading: "Your moment", labelFor: (slot) => label(slot) });
+    $("#dl").onclick = async () => {
+      const b = $("#dl"); b.disabled = true; b.textContent = "Preparing…";
+      try {
+        const blob = await paperPng({ text: (mine && mine.text) || "", me, mySlot: 0, heading: "My moment, most alive", labelFor: (slot) => label(slot) }, ctx.notes);
+        const nm = ((myPrivate && myPrivate.firstName) || "my").replace(/[^A-Za-z0-9_-]+/g, "_");
+        downloadBlob(`${nm}-most-alive.png`, blob);
+      } catch (e) { console.error(e); alert("Sorry — the download didn't work. Peter can send you a copy."); }
+      b.disabled = false; b.textContent = "Download my page";
+    };
     const legend = () => {
       const slots = [...new Set(ctx.notes.map((n) => n.slot))].sort();
       $("#legend").innerHTML = `<span><i style="background:#222"></i>You</span>` + slots.map((s) => `<span><i style="background:${SLOT_COLORS[s]}"></i>${esc(label(s))}</span>`).join("");
@@ -354,29 +365,95 @@ async function finishReading(pid) {
 function eligibleFor(uid, p) {
   return p.status === "pool" && p.submitted && p.author !== uid && !(p.readers || []).includes(uid) && (p.readers || []).length < ROUNDS;
 }
+// ---- planning ahead ----
+// Before taking a piece, check that everyone at the same stage (people waiting now, plus people
+// still writing/reading who will need a piece next) can still each get a piece they haven't seen.
+// If taking a particular piece would strand someone, wait for the others to finish first.
+const HOLD_SECS = 90; // after this long, stop waiting for stragglers and take what's available
+// The pieces are the source of truth for who is reading what (people records can lag a moment).
+function readingNow() { const m = new Map(); for (const pc of pieces) if (pc.status === "reading" && pc.reader) m.set(pc.reader, pc); return m; }
+function isWaiting(p, busy) { return p.phase === "waiting" && !busy.has(p.id); }
+function stagePlan(stage) {
+  const persons = [], avail = new Map();
+  const busy = readingNow();
+  for (const p of peopleAll) {
+    const rd = p.readsDone || 0;
+    if (isWaiting(p, busy) && rd === stage) persons.push(p.id);
+    else if (stage === 0 && p.phase === "writing") { persons.push(p.id); const d = pieces.find((x) => x.id === p.id); if (d) avail.set(d.id, d); }
+    else if (stage > 0 && p.phase === "reading" && rd === stage - 1) {
+      persons.push(p.id);
+      const h = pieces.find((x) => x.id === p.holding);
+      if (h && (h.readers || []).length < ROUNDS) avail.set(h.id, h);
+    }
+  }
+  for (const pc of pieces) if (pc.status === "pool" && pc.submitted && (pc.readers || []).length < ROUNDS) avail.set(pc.id, pc);
+  return { persons, pcs: [...avail.values()] };
+}
+const canRead = (u, pc) => pc.author !== u && pc.id !== u && !(pc.readers || []).includes(u);
+function everyoneCovered(persons, pcs) {
+  const owner = new Map();
+  const aug = (u, seen) => {
+    for (const pc of pcs) {
+      if (!canRead(u, pc) || seen.has(pc.id)) continue;
+      seen.add(pc.id);
+      if (!owner.has(pc.id) || aug(owner.get(pc.id), seen)) { owner.set(pc.id, u); return true; }
+    }
+    return false;
+  };
+  return persons.every((u) => aug(u, new Set()));
+}
+
+// Every client computes the same plan from the same data: waiters take turns in the order
+// they finished, each taking the first piece that still leaves everyone else covered.
+function sharedPlan(stage) {
+  const now = store.now();
+  const busy = readingNow();
+  const waiters = peopleAll.filter((p) => isWaiting(p, busy) && (p.readsDone || 0) === stage)
+    .sort((a, b) => ((a.waitingSince || 0) - (b.waitingSince || 0)) || (a.id < b.id ? -1 : 1));
+  let { persons, pcs } = stagePlan(stage);
+  const taken = new Set();
+  const plan = {};
+  for (const w of waiters) {
+    const cands = pieces.filter((p) => !taken.has(p.id) && eligibleFor(w.id, p))
+      .sort((a, b) => ((b.readers || []).length - (a.readers || []).length) || ((a.pooledAt || 0) - (b.pooledAt || 0)) || (a.id < b.id ? -1 : 1));
+    if (!cands.length) continue;
+    const patient = (now - (w.waitingSince || now)) / 1000 < HOLD_SECS;
+    let pick = cands[0];
+    if (patient && persons.includes(w.id) && everyoneCovered(persons, pcs)) {
+      const others = persons.filter((u) => u !== w.id);
+      pick = cands.find((c) => everyoneCovered(others, pcs.filter((p) => p.id !== c.id)));
+      if (!pick) continue; // this person waits for the others to finish
+    }
+    plan[w.id] = pick.id;
+    taken.add(pick.id);
+    persons = persons.filter((u) => u !== w.id);
+    pcs = pcs.filter((p) => p.id !== pick.id);
+  }
+  return plan;
+}
+
 let matching = false;
 async function matchmake() {
-  if (matching || !person || person.phase !== "waiting" || !sid) return;
-  const cands = pieces.filter((p) => eligibleFor(me, p))
-    .sort((a, b) => ((b.readers || []).length - (a.readers || []).length) || ((a.pooledAt || 0) - (b.pooledAt || 0)));
-  if (!cands.length) return;
+  if (matching || !person || person.phase !== "waiting" || !sid || !peopleAll.length) return;
+  const plan = sharedPlan(person.readsDone || 0);
+  const pickId = plan[me];
+  if (store.kind === "mock") console.log("PLAN", me, JSON.stringify(plan), JSON.stringify(stagePlan(person.readsDone || 0).persons), peopleAll.map((p) => p.id + ":" + p.phase).join(","));
+  if (!pickId) return;
   matching = true;
   try {
-    for (const c of cands) {
-      const ok = await store.tx(async (t) => {
-        const p = await t.get(`sessions/${sid}/pieces/${c.id}`);
-        const pr = await t.get(`sessions/${sid}/people/${me}`);
-        if (!p || !pr || pr.phase !== "waiting") return false;
-        if (!eligibleFor(me, { ...p, id: c.id })) return false;
-        const now = store.now();
-        t.update(`sessions/${sid}/pieces/${c.id}`, { status: "reading", reader: me, readers: [...(p.readers || []), me], claimedAt: now, touched: false });
-        t.update(`sessions/${sid}/people/${me}`, { phase: "reading", holding: c.id, claimedAt: now });
-        return true;
-      }).catch((e) => { console.warn("claim failed", e); return false; });
-      if (ok) break;
-    }
+    await store.tx(async (t) => {
+      const p = await t.get(`sessions/${sid}/pieces/${pickId}`);
+      const pr = await t.get(`sessions/${sid}/people/${me}`);
+      if (!p || !pr || pr.phase !== "waiting") return false;
+      if (!eligibleFor(me, { ...p, id: pickId })) return false;
+      const now = store.now();
+      t.update(`sessions/${sid}/pieces/${pickId}`, { status: "reading", reader: me, readers: [...(p.readers || []), me], claimedAt: now, touched: false });
+      t.update(`sessions/${sid}/people/${me}`, { phase: "reading", holding: pickId, claimedAt: now });
+      return true;
+    }).catch((e) => { console.warn("claim failed", e); return false; });
   } finally { matching = false; }
 }
+let holding = false;
 
 // If someone has waited a while and nothing they can read is in the pool, swap into a
 // just-started, untouched reading: they take that piece, and its reader gets one from the pool.
